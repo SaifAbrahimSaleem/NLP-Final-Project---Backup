@@ -4,12 +4,15 @@ from nltk.stem import WordNetLemmatizer
 from nltk import word_tokenize
 from nltk.tokenize import RegexpTokenizer
 from nltk.corpus import stopwords
+from nltk import pos_tag, Tree, ngrams
 from sklearn.model_selection import cross_val_score
 from sklearn import metrics
 from sklearn.metrics import precision_recall_fscore_support
 from sklearn.feature_extraction.text import CountVectorizer
 from random import shuffle
 from collections import Counter, defaultdict
+import spacy
+from spacy import displacy
 import numpy as np
 import nltk
 import csv
@@ -19,7 +22,7 @@ import math
 
 nltk.download('wordnet')
 nltk.download('stopwords')
-
+nltk.download('averaged_perceptron_tagger')
 mode = ""
 option = "0"
 response = "0"
@@ -28,11 +31,17 @@ raw_data = [] # 2D Array Containing sentences
 parsed_data = [] # Array Containing Tuples of sentences and labels
 word_frequency = Counter()
 word_label_occurrences = Counter()
-preprocessed_data = []
+preprocessed_data_words = []
+preprocessed_data_grammars = []
 labels = []
 label_word_dict = defaultdict(list)
+label_grammar_dict = defaultdict(list)
 features = []
 
+"""
+    CHOICE METHODS
+        Simple methods used to take input from a user and also validate input for the right choice
+"""
 def get_option():
     print(" ")
     print("Options: ")
@@ -74,21 +83,44 @@ def feature_choices():
     print("Choose from the list below: ")
     print(" 1 - Predicting " + mode + " using " + mode + " specific words")
     print(" 2 - Predicting " + mode + " using " + mode + " specific grammars")
-    print(" 3 - Predicting " + mode + " using " + mode + " specific sentiments")
-    print(" 4 - Predicting " + mode + " using " + mode + " the semantic content of utterances")
-    print(" 5 - Predicting " + mode + " using sequence classification")
-    print(" 6 - Predicting " + mode + " using more than one technique")
-    print(" 7 - Predicting " + mode + " using all techniques")
+    print(" 3 - Predicting " + mode + " using more than one technique")
+    print(" 4 - Predicting " + mode + " using both techniques")
+    print("")
     choice = int(input())
-    if choice not in [1,2,3,4,5,6,7]:
-        print("select a number between 1 and 7 only Please!")
+    if choice not in [1,2,3,4]:
+        print("select a number between 1 and 4 only Please!")
         return feature_choices()
     if choice == 6:
         return choose_multiple()
     else:
         return choice
 
+def get_grammar_option():
+    print("Choose from the list below: ")
+    print(" 1 - Label Specific Grammars using Parts Of Speech (POS) Tagging")
+    print(" 2 - Label Specific Grammars using Dependency Relations")
+    print(" 3 - Label Specific Grammars using both Parts Of Speech (POS) Tagging and Dependency Relations")
+    choice = int(input())
+    if choice not in [1,2,3]:
+        print("Please Choose a Value between 1 and 3!")
+        get_grammar_option()
+    else:
+        return choice
+
+def choose_n_grams():
+    print("Enter the value of N for an N-Gram model (1-3): ")
+    print("")
+    choice = int(input())
+    print("")
+    if choice not in [1,2,3]:
+        print("Please choose a value between 1 and 3!")
+        choose_n_grams()
+    else:
+        return choice
+"""##########################################################################################################"""
+
 def print_vals(is_testing, mode):
+    """         PRINTING THE MODE CHOSEN        """
     if is_testing:
         is_testing_string = "TESTING"
     else:
@@ -116,9 +148,9 @@ def parse_line(line,mode):
     else:
         return (line[0], line[1])
 
-def preprocess_text(sentence, label):
+def preprocess_text(preprocessed_dataset, sentence, label, option, n_gram_choice):
     """
-        PREPROCESSING TEXT (SAME METHOD AS USED IN LAB 2 SOLUTIONS)
+        PREPROCESSING TEXT FOR WORDS (SAME METHOD AS USED IN LAB 2 SOLUTIONS)
         STEPS:
             - Tokenize each sentence and remove punctuation (using regular expressions)
             - Change all characters in a word to lowercase
@@ -126,34 +158,53 @@ def preprocess_text(sentence, label):
             - Lemmatize words (use the lemma form of a group of words where possible)
             - append the result to preprocessed data (stored as a global variable)
     """
-    # Removing punctuation from sentences and tokenising the line
     regex_tokeniser = RegexpTokenizer(r'\w+')
     sentence_tokens = regex_tokeniser.tokenize(sentence)
-    # changing the words in the line to lowercase
     sentence_tokens = [token.lower() for token in sentence_tokens]
-    # removing stopwords
     sentence_tokens = [token for token in sentence_tokens if token not in set(stopwords.words('english'))]
-    # lemmatising the line
+    if option == 1:
+        POS_Tagged_sentence_tokens = nltk.pos_tag(sentence_tokens)
+        for index, token in enumerate(sentence_tokens):
+            if len(sentence_tokens) != 0:
+                sentence_tokens[index] += " " + str(POS_Tagged_sentence_tokens[index][1])
+    elif option == 2:
+        spacy_model = spacy.load('en_core_web_sm')
+        dependency_relation = spacy_model(sentence)
+        for index, token in enumerate(sentence_tokens):
+            if len(sentence_tokens) != 0:
+                if sentence_tokens[index] == dependency_relation[index].text:
+                    sentence_tokens[index] += " " + str(dependency_relation[index].dep_)
+    elif option == 3:
+        spacy_model = spacy.load('en_core_web_sm')
+        POS_Tagged_sentence_tokens = nltk.pos_tag(sentence_tokens)
+        for index, token in enumerate(sentence_tokens):
+            dependency_relation = spacy_model(sentence)
+            if len(sentence_tokens) != 0:
+                if token == dependency_relation[index].text:
+                    sentence_tokens[index] += " " + str(POS_Tagged_sentence_tokens[index][1]) + " " + str(dependency_relation[index].dep_)
     lemmatiser = WordNetLemmatizer()
     sentence_tokens = [lemmatiser.lemmatize(token) for token in sentence_tokens]
-    preprocessed_data.append((sentence_tokens, label))
+    if n_gram_choice in [1,2,3]:
+        sentence_tokens = ngrams(sentence_tokens, n_gram_choice)
+    preprocessed_dataset.append((list(map(str,sentence_tokens)), label))
 
-def clean_data():
+def clean_data(dataset):
     """
         REMOVING TUPLES WITH EMPTY LISTS FROM THE PREPROCESSED DATA
             After printing the preprocessed data, it was apparent that some tuples contained empty lists.
             Below is a method which was used to remove the tuples containing empty lists.
     """
     print("")
-    print("Cleaning Data: ")
     count = 0
     num_nulls_ac = 0
     empty_index = []
-    for index, entry in enumerate(preprocessed_data):
+    for index, entry in enumerate(dataset):
         if len(entry[0]) == 0:
             empty_index.append(index)
+        count += 1
+        progress_bar(count, len(dataset), "Cleaning Data: ")
     for index in sorted(empty_index, reverse=True):
-        del preprocessed_data[index]
+        del dataset[index]
 
 
 def load_csv(file_path, mode):
@@ -184,35 +235,30 @@ def label_specific_words():
                 - return the result
     """
     count = 0
-    for entry in preprocessed_data:
+    for entry in preprocessed_data_words:
         for word in entry[0]:
             if word not in label_word_dict[entry[1]]:
                 label_word_dict[entry[1]].append(word)
-        progress_bar(count, len(preprocessed_data), "Finding all label specific words: ")
+        progress_bar(count, len(preprocessed_data_words), "Finding all label specific words: ")
         count+=1
     return label_word_dict
 
 def label_specific_grammars():
-    print("label_specific_grammars")
-    return None
-
-def label_specific_sentiments():
-    print("label_specific_sentiments")
-    return None
-
-def label_specific_semantics():
-    print("label_specific_semantics")
-    return None
-
-def sequence_classification():
-    print("sequence_classification")
-    return None
+    """GRAMMATICAL STRUCTURES"""
+    count = 0
+    for entry in preprocessed_data_grammars:
+        for grammar in entry[0]:
+            if grammar not in label_word_dict[entry[1]]:
+                label_grammar_dict[entry[1]].append(grammar)
+        progress_bar(count, len(preprocessed_data_grammars), "\r Finding all label specific words: ")
+        count+=1
+    return label_grammar_dict
 
 def run_all():
     print("run_all")
     return None
 
-def features_to_vector(features, option):
+def features_to_vector(dataset, features, option):
     print("")
     WF = 0
     ILF = 0
@@ -242,10 +288,10 @@ def features_to_vector(features, option):
                         word_label_occurrences[word] += 1.0
                     except:
                         word_label_occurrences[word] = 1.0
-        for entry in preprocessed_data:
+        for entry in dataset:
             weighted_w_dict = {}
             for word in entry[0]:
-                WF = word_frequency[word]/len(preprocessed_data)
+                WF = word_frequency[word]/len(dataset)
                 ILF = math.log(float(len(labels))/word_label_occurrences[word])
                 word_weight = WF * ILF
                 try:
@@ -253,7 +299,7 @@ def features_to_vector(features, option):
                 except:
                     weighted_w_dict[word] = word_weight
             feature_vectors.append((weighted_w_dict,entry[1]))
-            progress_bar(iteration, len(preprocessed_data), "Calculating weights: ")
+            progress_bar(iteration, len(dataset), "\r Calculating weights: ")
             iteration+=1
         print("")
         return feature_vectors
@@ -262,8 +308,7 @@ def features_to_vector(features, option):
     # DO DA CALCULATIONZ
     return None
 
-def select_features():
-    features = feature_choices()
+def select_features(features):
     if isinstance(features,list):
         for feature in features:
             if feature == 1:
@@ -280,28 +325,67 @@ def select_features():
                 sequence_classification()
     elif isinstance(features,int):
         if features == 1:
+            iteration = 0
+            n_gram_choice = choose_n_grams()
+            for index, entry in enumerate(parsed_data):
+                preprocess_text(preprocessed_data_words, entry[0], entry[1],0,n_gram_choice)
+                progress_bar(index, len(parsed_data), "\r Pre-Processing Data: ")
+                iteration += 1
+            clean_data(preprocessed_data_words)
+            iteration = 0
+            for entry in preprocessed_data_words:
+                for word in entry[0]:
+                    try:
+                        word_frequency[word] += 1.0
+                    except:
+                        word_frequency[word] = 1.0
+                progress_bar(iteration, len(preprocessed_data_words), "\r Counting word frequency: ")
+                iteration+=1
+            print("")
             label_specific_word_dict = label_specific_words()
-            weighted_list = features_to_vector(label_specific_word_dict, 1)
+            weighted_list = features_to_vector(preprocessed_data_words, label_specific_word_dict,1)
             return weighted_list
+
         elif features == 2:
-            label_specific_grammars()
-            return
+            iteration = 0
+            option = get_grammar_option()
+            n_gram_choice = choose_n_grams()
+            for index, entry in enumerate(parsed_data):
+                preprocess_text(preprocessed_data_grammars, entry[0], entry[1], option, n_gram_choice)
+                progress_bar(index, len(parsed_data), "\r Pre-Processing Data: ")
+                iteration += 1
+            print("")
+            iteration = 0
+            for entry in preprocessed_data_grammars:
+                for grammar in entry[0]:
+                    try:
+                        word_frequency[grammar] += 1.0
+                    except:
+                        word_frequency[grammar] = 1.0
+                progress_bar(iteration, len(preprocessed_data_grammars), "\r Counting word frequency: ")
+                iteration+=1
+            clean_data(preprocessed_data_grammars)
+            label_specific_grammar_list = label_specific_grammars()
+            weighted_list = features_to_vector(preprocessed_data_grammars, label_specific_grammar_list, 2)
+            return weighted_list
+
         elif features == 3:
             label_specific_sentiments()
             return
+
         elif features == 4:
             label_specific_semantics()
             return
+
         elif features == 5:
             sequence_classification()
             return
+
         elif features == 7:
             run_all()
             return
-def cross_validate():
-    return None
 
-def build_classifier():
+def cross_validate():
     return None
 
 def get_vals():
@@ -317,31 +401,23 @@ def run_program(is_testing, mode):
     print(" ")
     print(print_vals(is_testing, mode))
     """###################################################################"""
+
     iteration = 0
+
     file_path = ''
     if is_testing:
         file_path = 'Data/datasets/test.csv'
     else:
         file_path = 'Data/datasets/training.csv'
+
     load_csv(file_path, mode)
-    for index, entry in enumerate(parsed_data):
-        preprocess_text(entry[0], entry[1])
-        progress_bar(index, len(parsed_data), "\r Pre-Processing Data: ")
-        iteration += 1
-    clean_data()
+    features = feature_choices()
     number_of_labels = int(len(labels))
     iteration = 0
-    for entry in preprocessed_data:
-        for word in entry[0]:
-            try:
-                word_frequency[word] += 1.0
-            except:
-                word_frequency[word] = 1.0
-        progress_bar(iteration, len(preprocessed_data), "Counting word frequency: ")
-        iteration+=1
-    print("")
-    weighted_data =  select_features()
-    build_classifier(weighted_data)
+    weighted_data =  select_features(features)
+    print("Training Classifier: ")
+    classifier = SklearnClassifier(LinearSVC(loss='squared_hinge', max_iter=999999)).train(weighted_data)
+
     # make_predictions()
     return None
 
